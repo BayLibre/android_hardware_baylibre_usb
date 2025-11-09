@@ -12,12 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package {
-    default_applicable_licenses: ["hardware_interfaces_license"],
-}
-
 apex {
-    name: "com.android.hardware.usb",
+    name: "com.android.hardware.usb.generic",
     manifest: "manifest.json",
     file_contexts: "file_contexts",
     key: "com.android.hardware.key",
@@ -25,25 +21,25 @@ apex {
     updatable: false,
     vendor: true,
 
-    binaries: ["android.hardware.usb-service.example"],
+    binaries: ["android.hardware.usb-service.generic"],
     prebuilts: [
-        "com.android.hardware.usb.rc", // init .rc
-        "android.hardware.usb.accessory.prebuilt.xml",
-        "android.hardware.usb.host.prebuilt.xml",
-        "android.hardware.usb-service.example.xml",
+        "com.android.hardware.usb.generic.rc", // init .rc
+        "android.hardware.usb-service.generic.xml",
+        "android.hardware.usb.gadget-service.generic.xml",
     ],
 }
 
 // Replace the binary path from /vendor/bin to /apex/{name}/bin in the init .rc file
 genrule {
-    name: "com.android.hardware.usb.rc-gen",
-    srcs: [":android.hardware.usb-service.example.rc"],
-    out: ["com.android.hardware.usb.rc"],
+    name: "com.android.hardware.usb.rc-gen.generic",
+    srcs: [":android.hardware.usb-service.generic.rc"],
+    out: ["com.android.hardware.usb.generic.rc"],
     cmd: "sed -E 's@/vendor/bin@/apex/com.android.hardware.usb/bin@' $(in) > $(out)",
 }
 
 prebuilt_etc {
-    name: "com.android.hardware.usb.rc",
-    src: ":com.android.hardware.usb.rc-gen",
+    name: "com.android.hardware.usb.generic.rc",
+    src: ":com.android.hardware.usb.rc-gen.generic",
     installable: false,
 }
+

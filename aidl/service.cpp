@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2021 The Android Open Source Project
+ * Copyright (C) 2018 The Android Open Source Project
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -14,22 +14,32 @@
  * limitations under the License.
  */
 
+#define LOG_TAG "android.hardware.usb-service.generic"
+
 #include <android-base/logging.h>
 #include <android/binder_manager.h>
 #include <android/binder_process.h>
 
 #include "Usb.h"
+#include "UsbGadget.h"
 
 using ::aidl::android::hardware::usb::Usb;
+using ::aidl::android::hardware::usb::gadget::UsbGadget;
 
 int main() {
     ABinderProcess_setThreadPoolMaxThreadCount(0);
-    std::shared_ptr<Usb> usb = ndk::SharedRefBase::make<Usb>();
 
+    std::shared_ptr<Usb> usb = ndk::SharedRefBase::make<Usb>();
     const std::string instance = std::string() + Usb::descriptor + "/default";
     binder_status_t status = AServiceManager_addService(usb->asBinder().get(), instance.c_str());
     CHECK(status == STATUS_OK);
 
+    std::shared_ptr<UsbGadget> usbgadget = ndk::SharedRefBase::make<UsbGadget>();
+    const std::string gadgetInstance = std::string() + UsbGadget::descriptor + "/default";
+    binder_status_t gadgetStatus = AServiceManager_addService(usbgadget->asBinder().get(), gadgetInstance.c_str());
+    CHECK(gadgetStatus == STATUS_OK);
+
     ABinderProcess_joinThreadPool();
+
     return -1; // Should never be reached
 }

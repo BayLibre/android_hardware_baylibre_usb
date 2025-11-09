@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2021 The Android Open Source Project
+ * Copyright (C) 2017 The Android Open Source Project
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-#define LOG_TAG "android.hardware.usb.aidl-service"
+#define LOG_TAG "android.hardware.usb-service.generic"
 
 #include <aidl/android/hardware/usb/PortRole.h>
 #include <android-base/logging.h>

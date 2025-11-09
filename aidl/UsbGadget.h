@@ -36,6 +36,8 @@
 #include <string>
 #include <thread>
 
+#include "UsbConfig.h"
+
 namespace aidl {
 namespace android {
 namespace hardware {
@@ -58,27 +60,14 @@ using ::ndk::ScopedAStatus;
 using ::std::shared_ptr;
 using ::std::string;
 
-constexpr char kGadgetName[] = "11110000.dwc3";
+// Generic paths (non SoC-specific)
 constexpr char kProcInterruptsPath[] = "/proc/interrupts";
 constexpr char kProcIrqPath[] = "/proc/irq/";
 constexpr char kSmpAffinityList[] = "/smp_affinity_list";
-#ifndef UDC_PATH
-#define UDC_PATH "/sys/class/udc/11110000.dwc3/"
-#endif
-//static MonitorFfs monitorFfs(kGadgetName);
+constexpr char kPowerSupplyPath[] = "/sys/class/power_supply/usb/";
+constexpr char kTypecBasePath[] = "/sys/class/typec/";
 
-#define SPEED_PATH UDC_PATH "current_speed"
-
-#define BIG_CORE "6"
-#define MEDIUM_CORE "4"
-
-#define POWER_SUPPLY_PATH	"/sys/class/power_supply/usb/"
-#define USB_PORT0_PATH		"/sys/class/typec/port0/"
-
-#define CURRENT_MAX_PATH			POWER_SUPPLY_PATH	"current_max"
-#define CURRENT_USB_TYPE_PATH			POWER_SUPPLY_PATH	"usb_type"
-#define CURRENT_USB_POWER_OPERATION_MODE_PATH	USB_PORT0_PATH		"power_operation_mode"
-
+// SoC-specific configuration loaded from properties via UsbConfig
 struct UsbGadget : public BnUsbGadget {
     UsbGadget();
 
@@ -88,6 +77,17 @@ struct UsbGadget : public BnUsbGadget {
     long mCurrentUsbFunctions;
     bool mCurrentUsbFunctionsApplied;
     UsbSpeed mUsbSpeed;
+
+    // SoC-specific configuration loaded from properties
+    std::string mGadgetName;
+    std::string mUdcPath;
+    std::string mSpeedPath;
+    std::string mI2cPath;
+    std::string mTypecPortPath;
+    std::string mBigCore;
+    std::string mMediumCore;
+    std::string mAccessoryLimitCurrent;
+    std::string mAccessoryLimitEnable;
 
     ScopedAStatus setCurrentUsbFunctions(int64_t functions,
             const shared_ptr<IUsbGadgetCallback> &callback,
@@ -107,6 +107,8 @@ struct UsbGadget : public BnUsbGadget {
     Status getUsbGadgetIrqPath();
     Status setupFunctions(long functions, const shared_ptr<IUsbGadgetCallback> &callback,
             uint64_t timeout, int64_t in_transactionId);
+    void loadConfiguration();
+    Status getI2cBusHelper(string *name);
 };
 
 }  // namespace gadget

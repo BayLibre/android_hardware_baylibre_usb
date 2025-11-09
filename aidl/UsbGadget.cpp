@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-#define LOG_TAG "android.hardware.usb.gadget.aidl-service"
+#define LOG_TAG "android.hardware.usb.gadget-service.generic"
 
 #include "UsbGadget.h"
 #include <dirent.h>
@@ -35,12 +35,61 @@ namespace usb {
 namespace gadget {
 
 string enabledPath;
-constexpr char kHsi2cPath[] = "/sys/devices/platform/10d50000.hsi2c";
-constexpr char kI2CPath[] = "/sys/devices/platform/10d50000.hsi2c/i2c-";
-constexpr char kAccessoryLimitCurrent[] = "i2c-max77759tcpc/usb_limit_accessory_current";
-constexpr char kAccessoryLimitCurrentEnable[] = "i2c-max77759tcpc/usb_limit_accessory_enable";
 
 UsbGadget::UsbGadget() : mGadgetIrqPath("") {
+    loadConfiguration();
+}
+
+void UsbGadget::loadConfiguration() {
+    // Load SoC-specific configuration from properties
+    mGadgetName = UsbConfig::getControllerName();
+    mI2cPath = UsbConfig::getI2cPath();
+    mBigCore = UsbConfig::getBigCore();
+    mMediumCore = UsbConfig::getMediumCore();
+    mAccessoryLimitCurrent = UsbConfig::getAccessoryLimitCurrent();
+    mAccessoryLimitEnable = UsbConfig::getAccessoryLimitEnable();
+
+    // Auto-detect UDC controller if not specified
+    if (mGadgetName.empty()) {
+        DIR* dir = opendir("/sys/class/udc");
+        if (dir) {
+            struct dirent* entry;
+            while ((entry = readdir(dir)) != nullptr) {
+                if (entry->d_type == DT_LNK || entry->d_type == DT_DIR) {
+                    if (strcmp(entry->d_name, ".") != 0 && strcmp(entry->d_name, "..") != 0) {
+                        mGadgetName = entry->d_name;
+                        ALOGI("Auto-detected USB controller: %s", mGadgetName.c_str());
+                        break;
+                    }
+                }
+            }
+            closedir(dir);
+        }
+        if (mGadgetName.empty()) {
+            ALOGE("Failed to detect USB controller, using default: 11110000.dwc3");
+            mGadgetName = "11110000.dwc3";
+        }
+    } else {
+        ALOGI("Using configured USB controller: %s", mGadgetName.c_str());
+    }
+
+    // Build paths from configuration
+    mUdcPath = "/sys/class/udc/" + mGadgetName + "/";
+    mSpeedPath = mUdcPath + "current_speed";
+
+    // Build Type-C port path
+    std::string typecPort = UsbConfig::getTypecPort();
+    mTypecPortPath = std::string(kTypecBasePath) + typecPort + "/";
+
+    ALOGI("USB HAL Configuration:");
+    ALOGI("  Controller: %s", mGadgetName.c_str());
+    ALOGI("  UDC Path: %s", mUdcPath.c_str());
+    ALOGI("  Speed Path: %s", mSpeedPath.c_str());
+    ALOGI("  Type-C Port: %s", mTypecPortPath.c_str());
+    ALOGI("  I2C Path: %s", mI2cPath.empty() ? "not configured" : mI2cPath.c_str());
+    ALOGI("  CPU Affinity - Big: %s, Medium: %s", mBigCore.c_str(), mMediumCore.c_str());
+    ALOGI("  Accessory Limit Current: %s", mAccessoryLimitCurrent.empty() ? "not configured" : mAccessoryLimitCurrent.c_str());
+    ALOGI("  Accessory Limit Enable: %s", mAccessoryLimitEnable.empty() ? "not configured" : mAccessoryLimitEnable.c_str());
 }
 
 Status UsbGadget::getUsbGadgetIrqPath() {
@@ -62,15 +111,20 @@ Status UsbGadget::getUsbGadgetIrqPath() {
 
         std::string single_irq = irqs.substr(read_pos, found_pos - read_pos);
 
-        if (single_irq.find("dwc3", 0) != std::string::npos) {
-            unsigned int dwc3_irq_number;
-            size_t dwc3_pos = single_irq.find_first_of(":");
-            if (!ParseUint(single_irq.substr(0, dwc3_pos), &dwc3_irq_number)) {
-                ALOGI("unknown IRQ strings");
-                return Status::ERROR;
+        // Search for gadget controller IRQ (e.g., "dwc3", "usb@ff500000", etc.)
+        if (single_irq.find("dwc3", 0) != std::string::npos ||
+            single_irq.find("usb", 0) != std::string::npos ||
+            single_irq.find(mGadgetName, 0) != std::string::npos) {
+            unsigned int irq_number;
+            size_t irq_pos = single_irq.find_first_of(":");
+            if (!ParseUint(single_irq.substr(0, irq_pos), &irq_number)) {
+                ALOGD("Could not parse IRQ number, trying next");
+                read_pos = found_pos + 1;
+                continue;
             }
 
-            mGadgetIrqPath = kProcIrqPath + single_irq.substr(0, dwc3_pos) + kSmpAffinityList;
+            mGadgetIrqPath = kProcIrqPath + single_irq.substr(0, irq_pos) + kSmpAffinityList;
+            ALOGI("Found USB gadget IRQ path: %s", mGadgetIrqPath.c_str());
             break;
         }
 
@@ -108,7 +162,7 @@ ScopedAStatus UsbGadget::getCurrentUsbFunctions(const shared_ptr<IUsbGadgetCallb
 ScopedAStatus UsbGadget::getUsbSpeed(const shared_ptr<IUsbGadgetCallback> &callback,
 	int64_t in_transactionId) {
     std::string current_speed;
-    if (ReadFileToString(SPEED_PATH, &current_speed)) {
+    if (ReadFileToString(mSpeedPath, &current_speed)) {
         current_speed = Trim(current_speed);
         ALOGI("current USB speed is %s", current_speed.c_str());
         if (current_speed == "low-speed")
@@ -178,10 +232,14 @@ Status UsbGadget::setupFunctions(long functions,
     return Status::SUCCESS;
 }
 
-Status getI2cBusHelper(string *name) {
-    DIR *dp;
+Status UsbGadget::getI2cBusHelper(string *name) {
+    // Skip if I2C controller not configured
+    if (mI2cPath.empty()) {
+        ALOGD("I2C controller not configured, skipping");
+        return Status::ERROR;
+    }
 
-    dp = opendir(kHsi2cPath);
+    DIR *dp = opendir(mI2cPath.c_str());
     if (dp != NULL) {
         struct dirent *ep;
 
@@ -197,7 +255,7 @@ Status getI2cBusHelper(string *name) {
         return Status::SUCCESS;
     }
 
-    ALOGE("Failed to open %s", kHsi2cPath);
+    ALOGE("Failed to open I2C path: %s", mI2cPath.c_str());
     return Status::ERROR;
 }
 
@@ -206,17 +264,21 @@ ScopedAStatus UsbGadget::setCurrentUsbFunctions(int64_t functions,
 					       int64_t timeoutMs,
 					       int64_t in_transactionId) {
     std::unique_lock<std::mutex> lk(mLockSetCurrentFunction);
-    std::string current_usb_power_operation_mode, current_usb_type;
-    std::string usb_limit_sink_enable;
 
     string accessoryCurrentLimitEnablePath, accessoryCurrentLimitPath, path;
 
     mCurrentUsbFunctions = functions;
     mCurrentUsbFunctionsApplied = false;
 
-    getI2cBusHelper(&path);
-    accessoryCurrentLimitPath = kI2CPath + path + "/" + kAccessoryLimitCurrent;
-    accessoryCurrentLimitEnablePath = kI2CPath + path + "/" + kAccessoryLimitCurrentEnable;
+    // Only configure I2C accessory limits if configured via properties
+    if (!mAccessoryLimitCurrent.empty() && !mAccessoryLimitEnable.empty() &&
+        !mI2cPath.empty() && getI2cBusHelper(&path) == Status::SUCCESS) {
+        std::string i2cBasePath = mI2cPath + "/i2c-";
+        accessoryCurrentLimitPath = i2cBasePath + path + "/" + mAccessoryLimitCurrent;
+        accessoryCurrentLimitEnablePath = i2cBasePath + path + "/" + mAccessoryLimitEnable;
+    } else {
+        ALOGD("Accessory current limits not configured or I2C controller not available");
+    }
 
     // Get the gadget IRQ number before tearDownGadget()
     if (mGadgetIrqPath.empty())
@@ -251,36 +313,40 @@ ScopedAStatus UsbGadget::setCurrentUsbFunctions(int64_t functions,
 
     if (functions & GadgetFunction::NCM) {
         if (!mGadgetIrqPath.empty()) {
-            if (!WriteStringToFile(BIG_CORE, mGadgetIrqPath))
+            if (!WriteStringToFile(mBigCore, mGadgetIrqPath))
                 ALOGI("Cannot move gadget IRQ to big core, path:%s", mGadgetIrqPath.c_str());
         }
     } else {
         if (!mGadgetIrqPath.empty()) {
-            if (!WriteStringToFile(MEDIUM_CORE, mGadgetIrqPath))
+            if (!WriteStringToFile(mMediumCore, mGadgetIrqPath))
                 ALOGI("Cannot move gadget IRQ to medium core, path:%s", mGadgetIrqPath.c_str());
         }
     }
 
-    if (ReadFileToString(CURRENT_USB_TYPE_PATH, &current_usb_type))
-        current_usb_type = Trim(current_usb_type);
+    // Note: Platform-specific USB type/power mode detection not available on this SoC
+    // The following code is disabled as CURRENT_USB_TYPE_PATH and
+    // CURRENT_USB_POWER_OPERATION_MODE_PATH are platform-specific (e.g., Pixel devices)
+    // and not applicable to generic implementations.
 
-    if (ReadFileToString(CURRENT_USB_POWER_OPERATION_MODE_PATH, &current_usb_power_operation_mode))
-        current_usb_power_operation_mode = Trim(current_usb_power_operation_mode);
+    // For platforms that support accessory current limiting, configure via UsbConfig properties:
+    // vendor.usb.accessory.limit_current and vendor.usb.accessory.limit_enable
 
-    if (functions & GadgetFunction::ACCESSORY &&
-        current_usb_type == "Unknown SDP [CDP] DCP" &&
-        (current_usb_power_operation_mode == "default" ||
-        current_usb_power_operation_mode == "1.5A")) {
-        if (!WriteStringToFile("1300000", accessoryCurrentLimitPath)) {
-            ALOGI("Write 1.3A to limit current fail");
-        } else {
-            if (!WriteStringToFile("1", accessoryCurrentLimitEnablePath)) {
-                ALOGI("Enable limit current fail");
+    // Simplified accessory current limit handling
+    if (functions & GadgetFunction::ACCESSORY) {
+        if (!accessoryCurrentLimitPath.empty() && !accessoryCurrentLimitEnablePath.empty()) {
+            if (!WriteStringToFile("1300000", accessoryCurrentLimitPath)) {
+                ALOGI("Write 1.3A to limit current fail");
+            } else {
+                if (!WriteStringToFile("1", accessoryCurrentLimitEnablePath)) {
+                    ALOGI("Enable limit current fail");
+                }
             }
         }
     } else {
-        if (!WriteStringToFile("0", accessoryCurrentLimitEnablePath))
-            ALOGI("unvote accessory limit current failed");
+        if (!accessoryCurrentLimitEnablePath.empty()) {
+            if (!WriteStringToFile("0", accessoryCurrentLimitEnablePath))
+                ALOGI("unvote accessory limit current failed");
+        }
     }
 
     ALOGI("Usb Gadget setcurrent functions called successfully");
