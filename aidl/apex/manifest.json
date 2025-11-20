@@ -1,4 +1,4 @@
 {
-    "name": "com.android.hardware.usb",
+    "name": "com.android.hardware.usb.generic",
     "version": 1
 }

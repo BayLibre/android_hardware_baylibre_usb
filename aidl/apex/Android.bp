@@ -34,7 +34,7 @@ genrule {
     name: "com.android.hardware.usb.rc-gen.generic",
     srcs: [":android.hardware.usb-service.generic.rc"],
     out: ["com.android.hardware.usb.generic.rc"],
-    cmd: "sed -E 's@/vendor/bin@/apex/com.android.hardware.usb/bin@' $(in) > $(out)",
+    cmd: "sed -E 's@/vendor/bin@/apex/com.android.hardware.usb.generic/bin@' $(in) > $(out)",
 }
 
 prebuilt_etc {
